@@ -349,6 +349,7 @@ cu_10['patch_url_ext'] = ''
 cu_10['md5_url'] = "https://developer.download.nvidia.com/compute/cuda/10.0/Prod/docs/sidebar/md5sum.txt"
 cu_10['cuda_libraries'] = [
     'cudart',
+    'cudadevrt',
     'cufft',
     'cufftw',
     'cublas',
@@ -381,7 +382,8 @@ cu_10['linux'] = {'blob': 'cuda_10.0.130_410.48_linux',
                  'cuda_lib_fmt': 'lib{0}.so*',
                  'nvtoolsext_fmt': 'lib{0}.so*',
                  'nvvm_lib_fmt': 'lib{0}.so*',
-                 'libdevice_lib_fmt': 'libdevice.{0}.bc'
+                 'libdevice_lib_fmt': 'libdevice.{0}.bc',
+                 'devrt_lib_fmt': 'libcudadevrt.a',
                  }
 
 cu_10['windows'] = {'blob': 'cuda_10.0.130_411.31_windows',
@@ -392,7 +394,8 @@ cu_10['windows'] = {'blob': 'cuda_10.0.130_411.31_windows',
                    'libdevice_lib_fmt': 'libdevice.{0}.bc',
                    'NvToolsExtPath' :
                        os.path.join('c:' + os.sep, 'Program Files',
-                                    'NVIDIA Corporation', 'NVToolsExt', 'bin')
+                                    'NVIDIA Corporation', 'NVToolsExt', 'bin'),
+                    'devrt_lib_fmt': 'cudadevrt.lib',
                    }
 
 cu_10['osx'] = {'blob': 'cuda_10.0.130_mac',
@@ -400,7 +403,8 @@ cu_10['osx'] = {'blob': 'cuda_10.0.130_mac',
                'cuda_lib_fmt': 'lib{0}.10.0.dylib',
                'nvtoolsext_fmt': 'lib{0}.1.dylib',
                'nvvm_lib_fmt': 'lib{0}.3.3.0.dylib',
-               'libdevice_lib_fmt': 'libdevice.{0}.bc'
+               'libdevice_lib_fmt': 'libdevice.{0}.bc',
+               'devrt_lib_fmt': 'libcudadevrt.a',
                }
 
 
@@ -432,6 +436,7 @@ class Extractor(object):
         self.nvtoolsext_fmt = plt_config.get('nvtoolsext_fmt')
         self.nvvm_lib_fmt = plt_config['nvvm_lib_fmt']
         self.libdevice_lib_fmt = plt_config['libdevice_lib_fmt']
+        self.devrt_lib_fmt = plt_config['devrt_lib_fmt']
         self.patches = plt_config['patches']
         self.nvtoolsextpath = plt_config.get('NvToolsExtPath')
         self.config = {'version': version, **ver_config}
@@ -545,11 +550,18 @@ class Extractor(object):
         filepaths = []
         # nvToolsExt is different to the rest of the cuda libraries,
         # it follows a different naming convention, this accommodates...
-        cudalibs = [x for x in self.cuda_libraries if x != 'nvToolsExt']
+        cudalibs = [
+            x
+            for x in self.cuda_libraries
+            if x not in {'cudadevrt', 'nvToolsExt'}
+        ]
         filepaths += self.get_paths(cudalibs, cuda_lib_dir, self.cuda_lib_fmt)
         if 'nvToolsExt' in self.cuda_libraries:
             filepaths += self.get_paths(['nvToolsExt'], cuda_lib_dir,
                                         self.nvtoolsext_fmt)
+        if 'cudadevrt' in self.cuda_libraries:
+            filepaths += self.get_paths(['cudadevrt'], cuda_lib_dir,
+                                        self.devrt_lib_fmt)
         filepaths += self.get_paths(['nvvm'], nvvm_lib_dir, self.nvvm_lib_fmt)
         filepaths += self.get_paths(self.libdevice_versions, libdevice_lib_dir,
                                     self.libdevice_lib_fmt)
@@ -649,25 +661,31 @@ class LinuxExtractor(Extractor):
     def copy(self, *args):
         basepath = args[0]
         self.copy_files(
-            cuda_lib_dir=os.path.join(
-                basepath, 'lib64'), nvvm_lib_dir=os.path.join(
-                basepath, 'nvvm', 'lib64'), libdevice_lib_dir=os.path.join(
-                basepath, 'nvvm', 'libdevice'))
+            cuda_lib_dir=os.path.join(basepath, 'lib64'),
+            nvvm_lib_dir=os.path.join(basepath, 'nvvm', 'lib64'),
+            libdevice_lib_dir=os.path.join(basepath, 'nvvm', 'libdevice'))
 
     def extract(self):
         runfile = self.cu_blob
         patches = self.patches
         os.chmod(runfile, 0o777)
-        with tempdir() as tmpd:
-            cmd = [os.path.join(self.src_dir, runfile),
-                        '--toolkitpath', tmpd, '--toolkit', '--silent']
+        tmpd = os.path.abspath(os.path.join(self.src_dir, 'tmpd'))
+        cmd = [
+        	os.path.join(self.src_dir, runfile),
+            '--toolkitpath',
+            tmpd, 
+            '--toolkit', 
+            '--silent',
+            '--override',
+            '--nox11',
+        ]
+        check_call(cmd)
+        for p in patches:
+            os.chmod(p, 0o777)
+            cmd = [os.path.join(self.src_dir, p),
+                        '--installdir', tmpd, '--accept-eula', '--silent']
             check_call(cmd)
-            for p in patches:
-                os.chmod(p, 0o777)
-                cmd = [os.path.join(self.src_dir, p),
-                            '--installdir', tmpd, '--accept-eula', '--silent']
-                check_call(cmd)
-            self.copy(tmpd)
+        self.copy(tmpd)
 
 
 @contextmanager
